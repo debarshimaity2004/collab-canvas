@@ -16,4 +16,7 @@ export interface Session {
 export interface AuthTokens {
   accessToken: string
   refreshToken: string
+  userId: string
+  name: string
+  email: string
 }

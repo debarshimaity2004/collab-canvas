@@ -19,7 +19,7 @@ export function subscribeToRoom(roomId: string, wss: WebSocketServer) {
 
   redisSub.subscribe(channelForRoom(roomId))
 
-  redisSub.on('message', (channel, message) => {
+  redisSub.on('message', (channel: string, message: string) => {
     const rid = channel.replace('room:', '')
     const sockets = getRoomSockets(wss, rid)
     sockets.forEach((s) => {

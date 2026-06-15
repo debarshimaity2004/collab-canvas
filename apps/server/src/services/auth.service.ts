@@ -23,7 +23,7 @@ export async function loginUser(email: string, password: string): Promise<AuthTo
   const valid = await bcrypt.compare(password, user.password)
   if (!valid) throw new Error('Invalid credentials')
 
-  return generateTokens({ userId: user.id, email: user.email, name: user.name, iat: 0, exp: 0 })
+  return generateTokens({ userId: user.id, email: user.email, name: user.name })
 }
 
 export function generateTokens(payload: Omit<Session, 'iat' | 'exp'>): AuthTokens {
@@ -37,7 +37,7 @@ export function generateTokens(payload: Omit<Session, 'iat' | 'exp'>): AuthToken
     expiresIn: env.JWT_REFRESH_EXPIRES_IN,
   } as jwt.SignOptions)
 
-  return { accessToken, refreshToken }
+  return { accessToken, refreshToken, userId: payload.userId, name: payload.name, email: payload.email }
 }
 
 export function verifyRefreshToken(token: string): Omit<Session, 'iat' | 'exp'> {

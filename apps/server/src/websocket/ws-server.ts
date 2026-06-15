@@ -3,7 +3,7 @@ import { IncomingMessage } from 'http'
 import jwt from 'jsonwebtoken'
 import { env } from '../config/env.js'
 import type { Session } from '@collab-canvas/types'
-import { handleRoomJoin, handleRoomLeave } from './room-handler.js'
+import { handleRoomJoin, handleRoomLeave, handleCanvasUpdate } from './room-handler.js'
 import { handlePresence } from './presence-handler.js'
 import { WS_EVENTS } from '@collab-canvas/types'
 
@@ -37,22 +37,24 @@ export function createWsServer(port: number) {
     socket.userId = session.userId
     socket.userName = session.name
 
-    socket.on('message', (data) => {
+    socket.on('message', (data, isBinary) => {
+      if (isBinary) {
+        // Binary Yjs canvas update — apply to room doc and broadcast to peers
+        if (socket.roomId) handleCanvasUpdate(socket, data as Buffer, wss)
+        return
+      }
       try {
-        // Binary Yjs updates are forwarded as-is; JSON control messages are parsed
-        if (typeof data === 'string') {
-          const msg = JSON.parse(data)
-          switch (msg.event) {
-            case WS_EVENTS.JOIN_ROOM:
-              handleRoomJoin(socket, msg.payload.roomId, wss)
-              break
-            case WS_EVENTS.LEAVE_ROOM:
-              handleRoomLeave(socket, wss)
-              break
-            case WS_EVENTS.CURSOR_MOVE:
-              handlePresence(socket, msg.payload, wss)
-              break
-          }
+        const msg = JSON.parse((data as Buffer).toString())
+        switch (msg.event) {
+          case WS_EVENTS.JOIN_ROOM:
+            handleRoomJoin(socket, msg.payload.roomId, wss)
+            break
+          case WS_EVENTS.LEAVE_ROOM:
+            handleRoomLeave(socket, wss)
+            break
+          case WS_EVENTS.CURSOR_MOVE:
+            handlePresence(socket, msg.payload, wss)
+            break
         }
       } catch (err) {
         console.error('WS message error:', err)

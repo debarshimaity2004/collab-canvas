@@ -9,7 +9,7 @@ import {
   inviteMember,
 } from '../controllers/room.controller.js'
 
-const router = Router()
+const router: Router = Router()
 
 router.use(authenticate, apiLimiter)
 

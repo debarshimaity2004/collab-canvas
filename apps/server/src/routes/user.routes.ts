@@ -3,7 +3,7 @@ import { authenticate, AuthRequest } from '../middleware/auth.middleware.js'
 import { prisma } from '../db/prisma.js'
 import { Response } from 'express'
 
-const router = Router()
+const router: Router = Router()
 
 router.get('/me', authenticate, async (req: AuthRequest, res: Response) => {
   const user = await prisma.user.findUnique({

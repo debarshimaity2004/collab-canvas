@@ -13,6 +13,14 @@ const loginSchema = z.object({
   password: z.string(),
 })
 
+const COOKIE_OPTS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'lax' as const,
+  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+  path: '/',
+}
+
 export async function register(req: Request, res: Response): Promise<void> {
   const result = registerSchema.safeParse(req.body)
   if (!result.success) {
@@ -21,8 +29,14 @@ export async function register(req: Request, res: Response): Promise<void> {
   }
 
   try {
-    const user = await registerUser(result.data.email, result.data.password, result.data.name)
-    res.status(201).json({ user })
+    await registerUser(result.data.email, result.data.password, result.data.name)
+    const tokens = await loginUser(result.data.email, result.data.password)
+    res.cookie('refresh_token', tokens.refreshToken, COOKIE_OPTS)
+    res.status(201).json({
+      accessToken: tokens.accessToken,
+      userId: tokens.userId,
+      name: tokens.name,
+    })
   } catch (err) {
     res.status(409).json({ error: (err as Error).message })
   }
@@ -37,24 +51,40 @@ export async function login(req: Request, res: Response): Promise<void> {
 
   try {
     const tokens = await loginUser(result.data.email, result.data.password)
-    res.json(tokens)
+    res.cookie('refresh_token', tokens.refreshToken, COOKIE_OPTS)
+    res.json({
+      accessToken: tokens.accessToken,
+      userId: tokens.userId,
+      name: tokens.name,
+    })
   } catch (err) {
     res.status(401).json({ error: (err as Error).message })
   }
 }
 
+// Accepts refresh token from httpOnly cookie or body (WS/mobile clients)
 export async function refresh(req: Request, res: Response): Promise<void> {
-  const { refreshToken } = req.body
-  if (!refreshToken) {
+  const token = req.cookies?.refresh_token ?? req.body?.refreshToken
+  if (!token) {
     res.status(400).json({ error: 'Refresh token required' })
     return
   }
 
   try {
-    const payload = verifyRefreshToken(refreshToken)
+    const payload = verifyRefreshToken(token)
     const tokens = generateTokens(payload)
-    res.json(tokens)
+    res.cookie('refresh_token', tokens.refreshToken, COOKIE_OPTS)
+    res.json({
+      accessToken: tokens.accessToken,
+      userId: tokens.userId,
+      name: tokens.name,
+    })
   } catch {
     res.status(401).json({ error: 'Invalid or expired refresh token' })
   }
+}
+
+export async function logout(_req: Request, res: Response): Promise<void> {
+  res.clearCookie('refresh_token', { path: '/' })
+  res.status(204).send()
 }
