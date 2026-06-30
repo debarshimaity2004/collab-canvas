@@ -17,6 +17,7 @@ export interface CollaborationState {
   shapes: Y.Map<Shape> | null
   undoManager: Y.UndoManager | null
   connected: boolean
+  roomDeleted: boolean
   cursors: Map<string, CursorPosition>
   sendCursor: (x: number, y: number) => void
 }
@@ -37,6 +38,7 @@ export function useCollaboration(
   userName: string
 ): CollaborationState {
   const [connected, setConnected] = useState(false)
+  const [roomDeleted, setRoomDeleted] = useState(false)
   const [cursors, setCursors] = useState<Map<string, CursorPosition>>(new Map())
   const docRef = useRef<Y.Doc | null>(null)
   const shapesRef = useRef<Y.Map<Shape> | null>(null)
@@ -90,6 +92,10 @@ export function useCollaboration(
             return next
           })
         }
+        if (msg.event === WS_EVENTS.ROOM_DELETED) {
+          setRoomDeleted(true)
+          ws.close()
+        }
       } catch {}
     }
 
@@ -133,6 +139,7 @@ export function useCollaboration(
     shapes: shapesRef.current,
     undoManager: undoManagerRef.current,
     connected,
+    roomDeleted,
     cursors,
     sendCursor,
   }

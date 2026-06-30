@@ -2,6 +2,7 @@ import { Response } from 'express'
 import { z } from 'zod'
 import { AuthRequest } from '../middleware/auth.middleware.js'
 import { createRoom, getRoomsForUser, getRoomById, deleteRoom, leaveRoom, addMemberToRoom } from '../services/room.service.js'
+import { notifyRoomDeleted } from '../websocket/room-handler.js'
 
 const createRoomSchema = z.object({ name: z.string().min(1).max(100) })
 const inviteSchema = z.object({ email: z.string().email() })
@@ -39,6 +40,8 @@ export async function createRoomHandler(req: AuthRequest, res: Response): Promis
 
 export async function deleteRoomHandler(req: AuthRequest, res: Response): Promise<void> {
   try {
+    // Notify connected clients before deleting so they can gracefully redirect
+    notifyRoomDeleted(req.params.id)
     await deleteRoom(req.params.id, req.user!.userId)
     res.status(204).send()
   } catch (err) {

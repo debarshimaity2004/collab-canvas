@@ -8,6 +8,15 @@ import { activeRooms, canvasOpsTotal } from '../metrics.js'
 
 const rooms = new Map<string, Set<string>>()
 
+// Module-level wss reference so REST controllers can trigger broadcasts
+let _wss: WebSocketServer | null = null
+export function setWss(wss: WebSocketServer) { _wss = wss }
+
+export function notifyRoomDeleted(roomId: string) {
+  if (!_wss) return
+  broadcastToRoom(_wss, roomId, { event: WS_EVENTS.ROOM_DELETED, payload: { roomId } })
+}
+
 // roomId → live Y.Doc (in-memory, authoritative while users are connected)
 const roomDocs = new Map<string, Y.Doc>()
 

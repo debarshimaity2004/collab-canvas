@@ -138,12 +138,19 @@ export default function RoomPage() {
     setHydrated(true)
   }, [router])
 
-  const { shapes, undoManager, connected, cursors, sendCursor } = useCollaboration(
+  const { shapes, undoManager, connected, roomDeleted, cursors, sendCursor } = useCollaboration(
     roomId,
     session?.accessToken ?? null,
     session?.userId ?? '',
     session?.name ?? 'Guest'
   )
+
+  useEffect(() => {
+    if (roomDeleted) {
+      const t = setTimeout(() => router.replace('/'), 3000)
+      return () => clearTimeout(t)
+    }
+  }, [roomDeleted, router])
 
   if (!hydrated) {
     return (
@@ -155,6 +162,14 @@ export default function RoomPage() {
 
   return (
     <div className="h-screen w-screen bg-gray-900 flex flex-col overflow-hidden">
+      {roomDeleted && (
+        <div className="absolute inset-x-0 top-0 z-50 flex items-center justify-center gap-3 bg-red-600 text-white text-sm font-medium py-3 px-4">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 4v4m0 2.5v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+          </svg>
+          This room was deleted by the owner. Returning to dashboard…
+        </div>
+      )}
       <header className="flex items-center justify-between px-4 py-2 bg-gray-800 border-b border-gray-700 h-12 shrink-0">
         <div className="flex items-center gap-3">
           <button onClick={() => router.push('/')} className="text-gray-400 hover:text-white transition-colors">

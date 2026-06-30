@@ -10,6 +10,7 @@ export const WS_EVENTS = {
   USER_JOINED: 'user_joined',
   USER_LEFT: 'user_left',
   PRESENCE_UPDATE: 'presence_update',
+  ROOM_DELETED: 'room_deleted',
   ERROR: 'error',
 } as const
 

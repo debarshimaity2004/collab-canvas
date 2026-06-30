@@ -3,7 +3,7 @@ import { IncomingMessage, Server } from 'http'
 import jwt from 'jsonwebtoken'
 import { env } from '../config/env.js'
 import type { Session } from '@collab-canvas/types'
-import { handleRoomJoin, handleRoomLeave, handleCanvasUpdate } from './room-handler.js'
+import { handleRoomJoin, handleRoomLeave, handleCanvasUpdate, setWss } from './room-handler.js'
 import { handlePresence } from './presence-handler.js'
 import { initRedisPubSub } from './redis-pubsub.js'
 import { WS_EVENTS } from '@collab-canvas/types'
@@ -75,6 +75,7 @@ export function createWsServer(server: Server) {
     })
   })
 
+  setWss(wss)
   initRedisPubSub(wss)
   console.log('WebSocket server attached to HTTP server')
   return wss
