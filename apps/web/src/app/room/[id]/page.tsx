@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { Canvas } from '../../../components/Canvas'
 import { Toolbar } from '../../../components/Toolbar'
@@ -125,6 +125,8 @@ export default function RoomPage() {
   const [session, setSession] = useState<AuthSession | null>(null)
   const [hydrated, setHydrated] = useState(false)
   const [showInvite, setShowInvite] = useState(false)
+  const exportFnRef = useRef<(() => void) | null>(null)
+  const handleExportReady = useCallback((fn: () => void) => { exportFnRef.current = fn }, [])
 
   useEffect(() => {
     const s = readSession()
@@ -177,6 +179,19 @@ export default function RoomPage() {
             <span className="text-xs text-gray-400">{cursors.size + 1} online</span>
           )}
 
+          {/* Export PNG button */}
+          <button
+            onClick={() => exportFnRef.current?.()}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-xs text-gray-200 font-medium transition-colors"
+            title="Export canvas as PNG"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M6 1v7M3.5 5.5L6 8l2.5-2.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M1 9.5v.5a1 1 0 001 1h8a1 1 0 001-1v-.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+            </svg>
+            Export
+          </button>
+
           {/* Invite button */}
           <button
             onClick={() => setShowInvite(true)}
@@ -200,6 +215,7 @@ export default function RoomPage() {
           userId={session?.userId ?? ''}
           cursors={cursors}
           sendCursor={sendCursor}
+          onExportReady={handleExportReady}
         />
       </div>
 

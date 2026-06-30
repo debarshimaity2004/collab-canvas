@@ -13,6 +13,7 @@ interface CanvasProps {
   userId: string
   cursors: Map<string, CursorPosition>
   sendCursor: (x: number, y: number) => void
+  onExportReady?: (exportFn: () => void) => void
 }
 
 interface TextEditorProps {
@@ -144,9 +145,30 @@ function TextEditor({ shape, viewport, shapes, onFinish }: TextEditorProps) {
   )
 }
 
-export function Canvas({ shapes, userId, cursors, sendCursor }: CanvasProps) {
+export function Canvas({ shapes, userId, cursors, sendCursor, onExportReady }: CanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const { selectedShapeId, setSelectedShapeId } = useCanvasStore()
+
+  // Register export function with parent so the header button can trigger it
+  useEffect(() => {
+    if (!onExportReady) return
+    onExportReady(() => {
+      const src = canvasRef.current
+      if (!src) return
+      // Composite onto a white background so the PNG isn't transparent
+      const tmp = document.createElement('canvas')
+      tmp.width = src.width
+      tmp.height = src.height
+      const ctx = tmp.getContext('2d')!
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, tmp.width, tmp.height)
+      ctx.drawImage(src, 0, 0)
+      const link = document.createElement('a')
+      link.download = 'collabcanvas.png'
+      link.href = tmp.toDataURL('image/png')
+      link.click()
+    })
+  }, [onExportReady])
 
   const { viewport, editingShapeId, finishEditing } = useCanvas(canvasRef, {
     shapes,
