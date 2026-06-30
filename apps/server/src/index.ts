@@ -9,6 +9,7 @@ import roomRoutes from './routes/room.routes.js'
 import userRoutes from './routes/user.routes.js'
 import { errorHandler } from './middleware/error.middleware.js'
 import { createWsServer } from './websocket/ws-server.js'
+import { register } from './metrics.js'
 
 const app = express()
 
@@ -18,6 +19,11 @@ app.use(cookieParser())
 app.use(express.json())
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }))
+
+app.get('/metrics', async (_req, res) => {
+  res.set('Content-Type', register.contentType)
+  res.send(await register.metrics())
+})
 
 app.use('/api/auth', authRoutes)
 app.use('/api/rooms', roomRoutes)

@@ -4,6 +4,7 @@ import { AuthenticatedSocket } from './ws-server.js'
 import { WS_EVENTS } from '@collab-canvas/types'
 import { subscribeToRoom, unsubscribeFromRoom, publishCanvasUpdate } from './redis-pubsub.js'
 import { saveSnapshot, loadSnapshot } from '../services/snapshot.service.js'
+import { activeRooms, canvasOpsTotal } from '../metrics.js'
 
 const rooms = new Map<string, Set<string>>()
 
@@ -66,6 +67,7 @@ export function handleCanvasUpdate(
 
   Y.applyUpdate(doc, update)
   publishCanvasUpdate(roomId, update, socket.userId)
+  canvasOpsTotal.inc()
 
   // Periodic snapshot — fire-and-forget, errors don't block the draw path
   const count = (updateCounts.get(roomId) ?? 0) + 1
@@ -86,6 +88,7 @@ export async function handleRoomJoin(
 
   if (!rooms.has(roomId)) rooms.set(roomId, new Set())
   rooms.get(roomId)!.add(socket.userId)
+  activeRooms.set(rooms.size)
 
   subscribeToRoom(roomId)
 
@@ -127,6 +130,7 @@ export async function handleRoomLeave(socket: AuthenticatedSocket, wss: WebSocke
 
   if (rooms.get(roomId)?.size === 0) {
     rooms.delete(roomId)
+    activeRooms.set(rooms.size)
     unsubscribeFromRoom(roomId)
     updateCounts.delete(roomId)
 

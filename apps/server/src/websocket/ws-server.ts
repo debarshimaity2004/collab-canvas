@@ -7,6 +7,7 @@ import { handleRoomJoin, handleRoomLeave, handleCanvasUpdate } from './room-hand
 import { handlePresence } from './presence-handler.js'
 import { initRedisPubSub } from './redis-pubsub.js'
 import { WS_EVENTS } from '@collab-canvas/types'
+import { wsConnectionsActive, wsConnectionsTotal } from '../metrics.js'
 
 export interface AuthenticatedSocket extends WebSocket {
   userId: string
@@ -18,6 +19,8 @@ export function createWsServer(server: Server) {
   const wss = new WebSocketServer({ server })
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
+    wsConnectionsActive.inc()
+    wsConnectionsTotal.inc()
     const url = new URL(req.url ?? '/', `ws://localhost`)
     const token = url.searchParams.get('token')
 
@@ -66,9 +69,10 @@ export function createWsServer(server: Server) {
       }
     })
 
-    socket.on('close', () =>
-      handleRoomLeave(socket, wss).catch((err) => console.error('handleRoomLeave on close:', err)),
-    )
+    socket.on('close', () => {
+      wsConnectionsActive.dec()
+      handleRoomLeave(socket, wss).catch((err) => console.error('handleRoomLeave on close:', err))
+    })
   })
 
   initRedisPubSub(wss)
