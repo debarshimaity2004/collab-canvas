@@ -8,14 +8,29 @@ Think lightweight Figma, built from scratch.
 
 ## What's working right now
 
-- **Register / login** with JWT auth (httpOnly cookie for refresh token)
-- **Dashboard** — create rooms, see all your rooms as cards with previews
-- **Real-time canvas** — draw rectangles, ellipses, and freehand pen strokes; changes appear on all connected tabs instantly
-- **CRDT sync** — binary Yjs updates over WebSocket; no conflicts, ever
-- **Undo / redo** — backed by Yjs UndoManager
-- **Live cursors** — see teammates' cursor positions with name labels in real time
-- **Invite to room** — share link or invite by email; new joiner catches up instantly via full Y.Doc state transfer
-- **Offline buffering** — ops queue in memory while disconnected, flush on reconnect
+**Auth & Workspace**
+- Register / login with JWT auth (httpOnly cookie for refresh token, auto-refresh on 401)
+- Dashboard — create rooms, see all your rooms as cards with live thumbnails
+- Delete room (owner only) or leave room (collaborators) — role-aware, protected server-side
+- Invite collaborators by email
+
+**Canvas**
+- Drawing tools: **rectangle**, **ellipse**, **freehand pen**, **arrow** (with filled arrowhead), **text**
+- Pan the canvas: hand tool, Space + drag, or middle mouse button
+- Zoom: scroll wheel toward cursor; viewport-invariant rendering via matrix transform
+- Select + drag any shape to reposition it
+- Resize any shape with 8 grab handles (corners + edge midpoints); arrows have 2 endpoint handles
+- Text tool: textarea overlay with auto-grow, drag corner to resize and scale font proportionally
+- Delete selected shape via floating button or `Delete` / `Backspace`
+- Undo / redo — backed by Yjs UndoManager
+
+**Real-time collaboration**
+- Binary Yjs CRDT sync over WebSocket — no conflicts, ever
+- Redis pub/sub fan-out for horizontal WebSocket scaling across multiple server instances
+- Live cursor positions with name labels and per-user colors
+- New joiner catches up instantly via full `Y.encodeStateAsUpdate` on join
+- Snapshot persistence: Yjs doc saved to PostgreSQL every 50 ops and when the last user leaves; reloaded on room join so state survives server restarts
+- y-indexeddb local persistence — canvas loads from IndexedDB instantly before WS sync completes
 
 ---
 
@@ -25,12 +40,12 @@ Think lightweight Figma, built from scratch.
 |---|---|
 | Frontend | Next.js 14 + TypeScript |
 | Canvas | Canvas API (raw, no library) |
-| CRDT | Yjs (Y.Doc, Y.Map, UndoManager) |
+| CRDT | Yjs (Y.Doc, Y.Map, UndoManager, y-indexeddb) |
 | State | Zustand |
 | Forms | React Hook Form + Zod |
 | Backend | Node.js + Express + TypeScript |
 | WebSocket | ws library (binary Yjs protocol) |
-| Pub/Sub | Redis (ioredis) |
+| Pub/Sub | Redis via ioredis |
 | Database | PostgreSQL + Prisma ORM |
 | Styling | TailwindCSS |
 | Infra | Docker + docker-compose |
@@ -45,6 +60,7 @@ Browser
   ├── Canvas API + RAF render loop
   ├── Yjs Y.Doc  (Y.Map<Shape> — CRDT state)
   ├── UndoManager
+  ├── y-indexeddb  (local persistence)
   └── WebSocket client
         │  binary Yjs updates (draw ops)
         │  JSON control messages (join/leave/cursor)
@@ -54,26 +70,27 @@ Browser
         │
         ├── server-side Y.Doc per room
         │     accumulates updates → sent to new joiners on join
+        │     periodic + on-empty-room save to PostgreSQL snapshots
         │
         └── Redis pub/sub (room:<id> channels)
-              fans out to all WS server instances
+              fans out binary Yjs updates to all WS server instances
         │
-  PostgreSQL (users, rooms, snapshots)
+  PostgreSQL (users, rooms, snapshots — binary Yjs state)
   Redis      (pub/sub, presence cache)
 ```
 
 ### Key data flows
 
 **Draw → sync:**
-User draws → Yjs encodes binary CRDT update → WebSocket sends to server → server applies to room Y.Doc + broadcasts binary to all peers → peers apply update → canvas re-renders via RAF loop
+User draws → Yjs encodes binary CRDT update → WebSocket sends to server → server applies to room Y.Doc + publishes to Redis → Redis fans out to all WS instances → peers apply update → canvas re-renders via RAF loop
 
 **New user joins:**
-Client connects → sends `join_room` → server calls `Y.encodeStateAsUpdate(roomDoc)` → sends full binary state → client applies → canvas fully caught up in one round trip
+Client connects → sends `join_room` → server loads latest Postgres snapshot + in-memory ops → `Y.encodeStateAsUpdate(roomDoc)` → sends full binary state → client applies → canvas fully caught up in one round trip
 
 **Offline:**
-WS disconnects → ops queue in memory → reconnect → queue flushes in order → Yjs deduplicates already-applied ops
+WS disconnects → y-indexeddb keeps local state → reconnect → Yjs syncs delta from server → deduplicates already-applied ops automatically
 
-**Why CRDTs not locks:** Yjs YATA operations are commutative and associative — any two states merged in any order always converge to the same result. No central sequencer needed.
+**Why CRDTs not locks:** Yjs uses YATA — operations are commutative and associative. Any two states merged in any order always converge to the same result. No central sequencer needed, no locking, no last-write-wins data loss.
 
 ---
 
@@ -82,51 +99,52 @@ WS disconnects → ops queue in memory → reconnect → queue flushes in order 
 ```
 collab-canvas/
 ├── apps/
-│   ├── web/                        # Next.js 14 frontend
+│   ├── web/                          # Next.js 14 frontend
 │   │   └── src/
 │   │       ├── app/
-│   │       │   ├── page.tsx        # Landing page (guest) / Dashboard (authed)
+│   │       │   ├── page.tsx          # Landing (guest) / Dashboard (authed)
 │   │       │   ├── login/
 │   │       │   ├── register/
-│   │       │   └── room/[id]/      # Canvas room
+│   │       │   └── room/[id]/        # Canvas room page
 │   │       ├── components/
-│   │       │   ├── Canvas.tsx      # Canvas element + remote cursor overlay
-│   │       │   └── Toolbar.tsx     # Tool picker, colors, undo/redo
+│   │       │   ├── Canvas.tsx        # Canvas element, TextEditor overlay, delete button
+│   │       │   └── Toolbar.tsx       # Tool picker, colors, stroke width, undo/redo
 │   │       ├── hooks/
-│   │       │   ├── useCollaboration.ts  # WS + Yjs sync + presence
-│   │       │   └── useCanvas.ts         # Drawing logic + RAF loop
+│   │       │   ├── useCollaboration.ts  # WS + Yjs sync + presence + cursors
+│   │       │   └── useCanvas.ts         # Drawing, pan/zoom, select, resize, RAF loop
 │   │       ├── lib/
-│   │       │   ├── canvas-renderer.ts
-│   │       │   ├── yjs.ts               # Y.Doc factory + UndoManager
+│   │       │   ├── canvas-renderer.ts   # renderShape, resize handles, bbox, selection ring
+│   │       │   ├── hit-test.ts          # Click → shape detection (per-type geometry)
+│   │       │   ├── yjs.ts               # Y.Doc factory, UndoManager, y-indexeddb provider
 │   │       │   └── op-queue.ts          # Offline op buffer
 │   │       └── store/
-│   │           └── canvas.store.ts      # Active tool, colors, stroke width
+│   │           └── canvas.store.ts      # Active tool, colors, stroke width, selectedShapeId
 │   │
-│   └── server/                     # Express + WebSocket backend
+│   └── server/                       # Express + WebSocket backend
 │       └── src/
-│           ├── routes/             # auth, rooms, users
+│           ├── routes/               # auth, rooms, users
 │           ├── controllers/
-│           ├── middleware/         # JWT verify, rate limit, error handler
+│           ├── middleware/           # JWT verify, rate limit, error handler
 │           ├── websocket/
-│           │   ├── ws-server.ts        # Binary/JSON message routing
-│           │   ├── room-handler.ts     # Y.Doc per room, canvas update broadcast
-│           │   ├── presence-handler.ts # Cursor broadcast
-│           │   └── redis-pubsub.ts     # Cross-instance fan-out
+│           │   ├── ws-server.ts          # Binary/JSON message routing
+│           │   ├── room-handler.ts       # Y.Doc per room, snapshot load/save, broadcast
+│           │   ├── presence-handler.ts   # Cursor broadcast
+│           │   └── redis-pubsub.ts       # Cross-instance binary fan-out
 │           ├── services/
 │           │   ├── auth.service.ts
-│           │   ├── room.service.ts
-│           │   └── snapshot.service.ts # Yjs state ↔ PostgreSQL
+│           │   ├── room.service.ts       # createRoom, deleteRoom (owner), leaveRoom (editor)
+│           │   └── snapshot.service.ts   # Yjs state ↔ PostgreSQL
 │           └── db/
 │               ├── prisma.ts
 │               └── redis.ts
 │
 └── packages/
-    └── types/                      # Shared TypeScript types
+    └── types/                        # Shared TypeScript types
         └── src/
-            ├── canvas.types.ts     # Shape, Tool, Point, DrawOp
+            ├── canvas.types.ts       # Shape, Tool, Point — all shape variants
             ├── room.types.ts
-            ├── user.types.ts       # Session, AuthTokens
-            └── ws-events.types.ts  # WS_EVENTS constants, CursorPosition
+            ├── user.types.ts
+            └── ws-events.types.ts    # WS_EVENTS constants, CursorPosition
 ```
 
 ---
@@ -161,8 +179,6 @@ Starts PostgreSQL on `5432` and Redis on `6379`.
 pnpm --filter @collab-canvas/server db:migrate
 ```
 
-Enter `init` when prompted for a migration name.
-
 ### 4. Start development servers
 
 **Terminal 1 — backend:**
@@ -192,10 +208,10 @@ pnpm --filter @collab-canvas/web dev
 |---|---|---|---|
 | POST | `/api/auth/register` | `{ email, password, name }` | Create account, sets httpOnly refresh cookie |
 | POST | `/api/auth/login` | `{ email, password }` | Login, sets httpOnly refresh cookie |
-| POST | `/api/auth/refresh` | cookie or `{ refreshToken }` | Rotate tokens |
+| POST | `/api/auth/refresh` | — (uses cookie) | Rotate tokens silently |
 | POST | `/api/auth/logout` | — | Clears refresh cookie |
 
-Login and register return `{ accessToken, userId, name }`. The refresh token is set as an httpOnly cookie automatically.
+Login and register return `{ accessToken, userId, name }`.
 
 ### Rooms
 
@@ -203,10 +219,11 @@ All room endpoints require `Authorization: Bearer <accessToken>`.
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/api/rooms` | List rooms you belong to |
+| GET | `/api/rooms` | List rooms you belong to (includes your `role`) |
 | POST | `/api/rooms` | Create a room (`{ name }`) |
 | GET | `/api/rooms/:id` | Get room details + members |
-| DELETE | `/api/rooms/:id` | Delete room (owner only) |
+| DELETE | `/api/rooms/:id` | Delete room permanently (owner only) |
+| POST | `/api/rooms/:id/leave` | Leave room — removes you from members (editor only) |
 | POST | `/api/rooms/:id/members` | Invite member by email (`{ email }`) |
 
 ### Users
@@ -230,7 +247,7 @@ JSON control messages:
 { "event": "cursor_move", "payload": { "x": 120, "y": 340, "color": "#6366f1" } }
 ```
 
-Canvas updates are sent as **raw binary** (Yjs encoded `Uint8Array`) — not JSON.
+Canvas updates are sent as **raw binary** (Yjs `Uint8Array`) — not JSON.
 
 **Server → Client**
 
@@ -242,7 +259,7 @@ JSON events:
 { "event": "presence_update", "payload": { "userId": "...", "name": "...", "x": 120, "y": 340, "color": "..." } }
 ```
 
-Canvas updates from peers are forwarded as **raw binary** Yjs updates. On room join, the server also sends a binary `Y.encodeStateAsUpdate(doc)` so the new client catches up to the full canvas state.
+Canvas updates from peers are forwarded as **raw binary** Yjs updates. On room join, the server sends `Y.encodeStateAsUpdate(doc)` as a binary message — new client catches up to full canvas state in one round trip.
 
 ---
 
@@ -251,7 +268,7 @@ Canvas updates from peers are forwarded as **raw binary** Yjs updates. On room j
 ```prisma
 User        id, email, password (bcrypt), name, createdAt
 Room        id, name, createdAt
-RoomMember  userId, roomId, role (editor)
+RoomMember  userId, roomId, role ('owner' | 'editor')
 Snapshot    id, roomId, data (Bytes — binary Yjs state), version, createdAt
 ```
 
@@ -263,45 +280,51 @@ Snapshot    id, roomId, data (Bytes — binary Yjs state), version, createdAt
 - [x] Monorepo scaffold (pnpm workspaces, shared types package)
 - [x] Docker compose: PostgreSQL + Redis
 - [x] Prisma schema + migrations
-- [x] JWT auth: register, login, refresh, logout
-- [x] httpOnly cookie for refresh token
+- [x] JWT auth: register, login, refresh, logout (httpOnly cookie)
 - [x] Room CRUD REST API + member invite
 
 ### Phase 2 — Real-time Core ✅
 - [x] Canvas renderer: Canvas API + requestAnimationFrame loop
 - [x] Drawing tools: rect, ellipse, freehand pen
-- [x] Yjs Y.Doc + Y.Map CRDT integration
-- [x] UndoManager (undo/redo)
+- [x] Yjs Y.Doc + Y.Map CRDT integration + UndoManager
 - [x] Binary WebSocket protocol for Yjs updates
 - [x] Server-side Y.Doc per room (new joiner state recovery)
 - [x] Live cursor positions with name labels
-- [x] Offline op queue with reconnect flush
 
-### Phase 3 — Scale + Polish (next)
-- [ ] Redis pub/sub for binary canvas fan-out (multi-instance)
-- [ ] y-indexeddb local persistence (instant reload)
-- [ ] Snapshot service: periodic Yjs state save to PostgreSQL
-- [ ] Pan + zoom via matrix transform
-- [ ] Additional tools: text, arrow, select + resize
-- [ ] Room name shown on canvas page
+### Phase 3 — Scale + Polish ✅
+- [x] Redis pub/sub for binary canvas fan-out (horizontal scaling)
+- [x] Snapshot service: Yjs state saved to PostgreSQL (survives server restart)
+- [x] y-indexeddb local persistence (instant reload)
+- [x] Pan + zoom: hand tool, Space+drag, middle mouse, scroll wheel
+- [x] Arrow tool with filled arrowhead
+- [x] Text tool with auto-grow, drag-to-scale font
+- [x] Select + drag to move shapes
+- [x] Resize handles for all shape types (8 handles; 2 for arrows)
+- [x] Delete: floating button + Delete/Backspace keyboard shortcut
+- [x] Access token auto-refresh on 401 (transparent to user)
+- [x] Role-aware delete/leave on dashboard (owner deletes room, editor leaves room)
 
-### Phase 4 — Production
+### Phase 4 — Production (next)
 - [ ] Prometheus metrics: connected users, op latency, room count
-- [ ] Nginx reverse proxy
-- [ ] Docker production build
-- [ ] Deploy to VPS / Railway
+- [ ] Export canvas to PNG
+- [ ] Docker production build + Nginx reverse proxy
+- [ ] Deploy to Railway / Render (live public URL)
 
 ---
 
 ## Key Engineering Decisions
 
-**CRDTs over Operational Transform** — OT requires a central server to serialize all operations and cannot scale horizontally. Yjs uses YATA, where any two states can be merged in any order and always converge. No coordinator needed.
+**CRDTs over Operational Transform** — OT requires a central server to serialize all operations and cannot scale horizontally. Yjs uses YATA, where any two states can be merged in any order and always converge. No coordinator needed, no data loss under concurrent edits.
 
 **Binary WebSocket protocol** — Yjs natively encodes updates as compact binary. Sending raw `Uint8Array` over WebSocket avoids JSON serialization overhead and base64 bloat. The server uses the `isBinary` flag to route canvas updates vs. JSON control messages.
 
-**Server-side Y.Doc per room** — The server maintains one Yjs document per active room in memory, applying every incoming update. When a new user joins, `Y.encodeStateAsUpdate(doc)` gives them the full canvas state in a single binary message — no need for a snapshot read on every join.
+**Server-side Y.Doc + PostgreSQL snapshots** — The server maintains one Yjs document per active room in memory. Every 50 ops (and when the last user leaves) the doc is compressed to a binary snapshot and saved to Postgres. On join, the server merges the latest snapshot with any in-memory ops before sending state to the new client — fast joins, durable state.
 
-**Raw Canvas API** — No Konva, Fabric.js, or other canvas library. The renderer is a pure function over shape state, driven by a `requestAnimationFrame` loop. This demonstrates CS fundamentals and gives full control over rendering performance.
+**Redis pub/sub for horizontal scaling** — Each WS server instance subscribes to a Redis channel per room (`room:<id>`). A canvas update arriving on instance-1 is published to Redis and forwarded to all subscribers — no direct instance-to-instance coupling needed. Adding more WS instances is a config change, not an architecture change.
+
+**Raw Canvas API** — No Konva, Fabric.js, or other canvas library. The renderer is a pure function over shape state, driven by a `requestAnimationFrame` loop with a single `ctx.setTransform` call for pan/zoom. Full control, no abstraction tax, demonstrates rendering fundamentals.
+
+**Viewport-invariant resize handles** — Handle size is computed as `8 / ctx.getTransform().a` so handles stay exactly 8 px on screen regardless of zoom level, preventing them from becoming unclickable at high zoom or overwhelming at low zoom.
 
 ---
 

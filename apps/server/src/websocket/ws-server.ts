@@ -5,6 +5,7 @@ import { env } from '../config/env.js'
 import type { Session } from '@collab-canvas/types'
 import { handleRoomJoin, handleRoomLeave, handleCanvasUpdate } from './room-handler.js'
 import { handlePresence } from './presence-handler.js'
+import { initRedisPubSub } from './redis-pubsub.js'
 import { WS_EVENTS } from '@collab-canvas/types'
 
 export interface AuthenticatedSocket extends WebSocket {
@@ -47,10 +48,14 @@ export function createWsServer(port: number) {
         const msg = JSON.parse((data as Buffer).toString())
         switch (msg.event) {
           case WS_EVENTS.JOIN_ROOM:
-            handleRoomJoin(socket, msg.payload.roomId, wss)
+            handleRoomJoin(socket, msg.payload.roomId, wss).catch((err) =>
+              console.error('handleRoomJoin error:', err),
+            )
             break
           case WS_EVENTS.LEAVE_ROOM:
-            handleRoomLeave(socket, wss)
+            handleRoomLeave(socket, wss).catch((err) =>
+              console.error('handleRoomLeave error:', err),
+            )
             break
           case WS_EVENTS.CURSOR_MOVE:
             handlePresence(socket, msg.payload, wss)
@@ -61,9 +66,12 @@ export function createWsServer(port: number) {
       }
     })
 
-    socket.on('close', () => handleRoomLeave(socket, wss))
+    socket.on('close', () =>
+      handleRoomLeave(socket, wss).catch((err) => console.error('handleRoomLeave on close:', err)),
+    )
   })
 
+  initRedisPubSub(wss)
   console.log(`WebSocket server listening on port ${port}`)
   return wss
 }

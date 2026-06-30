@@ -1,14 +1,22 @@
 import { Response } from 'express'
 import { z } from 'zod'
 import { AuthRequest } from '../middleware/auth.middleware.js'
-import { createRoom, getRoomsForUser, getRoomById, deleteRoom, addMemberToRoom } from '../services/room.service.js'
+import { createRoom, getRoomsForUser, getRoomById, deleteRoom, leaveRoom, addMemberToRoom } from '../services/room.service.js'
 
 const createRoomSchema = z.object({ name: z.string().min(1).max(100) })
 const inviteSchema = z.object({ email: z.string().email() })
 
 export async function listRooms(req: AuthRequest, res: Response): Promise<void> {
-  const rooms = await getRoomsForUser(req.user!.userId)
-  res.json({ rooms })
+  const userId = req.user!.userId
+  const rooms = await getRoomsForUser(userId)
+  res.json({
+    rooms: rooms.map(r => ({
+      id: r.id,
+      name: r.name,
+      createdAt: r.createdAt,
+      role: r.members.find(m => m.userId === userId)?.role ?? 'editor',
+    })),
+  })
 }
 
 export async function getRoom(req: AuthRequest, res: Response): Promise<void> {
@@ -35,6 +43,15 @@ export async function deleteRoomHandler(req: AuthRequest, res: Response): Promis
     res.status(204).send()
   } catch (err) {
     res.status(403).json({ error: (err as Error).message })
+  }
+}
+
+export async function leaveRoomHandler(req: AuthRequest, res: Response): Promise<void> {
+  try {
+    await leaveRoom(req.params.id, req.user!.userId)
+    res.status(204).send()
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message })
   }
 }
 

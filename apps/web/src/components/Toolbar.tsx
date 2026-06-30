@@ -5,9 +5,12 @@ import { useCanvasStore } from '../store/canvas.store'
 
 const TOOLS: { id: Tool; label: string; icon: string }[] = [
   { id: 'select', label: 'Select', icon: '↖' },
+  { id: 'hand', label: 'Pan (drag canvas)', icon: '✋' },
   { id: 'rect', label: 'Rectangle', icon: '▭' },
   { id: 'ellipse', label: 'Ellipse', icon: '◯' },
+  { id: 'arrow', label: 'Arrow', icon: '→' },
   { id: 'pen', label: 'Pen', icon: '✏' },
+  { id: 'text', label: 'Text', icon: 'T' },
 ]
 
 interface ToolbarProps {
@@ -22,6 +25,7 @@ export function Toolbar({ undoManager }: ToolbarProps) {
     <div className="absolute left-3 top-1/2 -translate-y-1/2 flex flex-col gap-1 bg-gray-800 border border-gray-700 rounded-xl p-2 shadow-lg z-10">
       {TOOLS.map((t) => (
         <button
+          type="button"
           key={t.id}
           title={t.label}
           onClick={() => setTool(t.id)}
@@ -36,7 +40,6 @@ export function Toolbar({ undoManager }: ToolbarProps) {
       ))}
 
       <div className="border-t border-gray-700 mt-1 pt-2 flex flex-col gap-2">
-        {/* Stroke color */}
         <label className="flex flex-col items-center gap-0.5">
           <span className="text-gray-500 text-[9px] uppercase tracking-wide">Stroke</span>
           <input
@@ -47,7 +50,6 @@ export function Toolbar({ undoManager }: ToolbarProps) {
           />
         </label>
 
-        {/* Fill color */}
         <label className="flex flex-col items-center gap-0.5">
           <span className="text-gray-500 text-[9px] uppercase tracking-wide">Fill</span>
           <input
@@ -58,7 +60,6 @@ export function Toolbar({ undoManager }: ToolbarProps) {
           />
         </label>
 
-        {/* Stroke width */}
         <label className="flex flex-col items-center gap-0.5">
           <span className="text-gray-500 text-[9px] uppercase tracking-wide">Width</span>
           <input
@@ -67,16 +68,15 @@ export function Toolbar({ undoManager }: ToolbarProps) {
             max={16}
             value={strokeWidth}
             onChange={(e) => setStrokeWidth(Number(e.target.value))}
-            className="w-7 accent-indigo-500"
-            style={{ writingMode: 'vertical-lr', direction: 'rtl', height: '48px' }}
+            className="toolbar-stroke-width-slider w-7 accent-indigo-500"
           />
         </label>
       </div>
 
-      {/* Undo / Redo */}
       {undoManager && (
         <div className="border-t border-gray-700 mt-1 pt-2 flex flex-col gap-1">
           <button
+            type="button"
             title="Undo (Ctrl+Z)"
             onClick={() => undoManager.undo()}
             className="w-9 h-9 flex items-center justify-center rounded-lg text-gray-300 hover:bg-gray-700 text-sm"
@@ -84,6 +84,7 @@ export function Toolbar({ undoManager }: ToolbarProps) {
             ↩
           </button>
           <button
+            type="button"
             title="Redo (Ctrl+Y)"
             onClick={() => undoManager.redo()}
             className="w-9 h-9 flex items-center justify-center rounded-lg text-gray-300 hover:bg-gray-700 text-sm"

@@ -1,12 +1,12 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'
 
-interface Room { id: string; name: string; createdAt: string }
+interface Room { id: string; name: string; createdAt: string; role: string }
 interface Session { accessToken: string; userId: string; name: string }
 
 function readSession(): Session | null {
@@ -121,24 +121,71 @@ function CreateRoomModal({ onClose, onCreated }: {
 }
 
 // ── Dashboard ────────────────────────────────────────────────────────────────
-function Dashboard({ session }: { session: Session }) {
+function Dashboard({ session: initialSession }: { session: Session }) {
   const router = useRouter()
   const [rooms, setRooms] = useState<Room[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
+  // Keep a mutable ref so fetchWithAuth always has the latest token
+  const sessionRef = useRef(initialSession)
 
-  useEffect(() => { fetchRooms() }, [])
+  useEffect(() => { fetchRooms() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch wrapper: auto-refreshes the access token on 401 and retries once
+  async function fetchWithAuth(url: string, init?: RequestInit): Promise<Response> {
+    const go = (token: string) =>
+      fetch(url, { ...init, headers: { ...init?.headers, Authorization: `Bearer ${token}` } })
+
+    let res = await go(sessionRef.current.accessToken)
+
+    if (res.status === 401) {
+      // Access token expired — use the httpOnly refresh cookie to get a new one
+      const refreshRes = await fetch(`${API_URL}/api/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include',
+      })
+
+      if (!refreshRes.ok) {
+        // Refresh token also expired — force sign-out
+        localStorage.removeItem('cc_session')
+        window.location.reload()
+        return res
+      }
+
+      const data = await refreshRes.json()
+      const newSession: Session = { accessToken: data.accessToken, userId: data.userId, name: data.name }
+      localStorage.setItem('cc_session', JSON.stringify(newSession))
+      sessionRef.current = newSession
+      res = await go(newSession.accessToken)
+    }
+
+    return res
+  }
 
   async function fetchRooms() {
     setLoading(true)
     try {
-      const res = await fetch(`${API_URL}/api/rooms`, {
-        headers: { Authorization: `Bearer ${session.accessToken}` },
-      })
+      const res = await fetchWithAuth(`${API_URL}/api/rooms`)
       const data = await res.json()
       setRooms(data.rooms ?? [])
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function handleRoomAction(room: Room) {
+    const isOwner = room.role === 'owner'
+    const msg = isOwner
+      ? 'Delete this room for everyone? This cannot be undone.'
+      : 'Leave this room? You will lose access to the canvas.'
+    if (!confirm(msg)) return
+
+    const res = isOwner
+      ? await fetchWithAuth(`${API_URL}/api/rooms/${room.id}`, { method: 'DELETE' })
+      : await fetchWithAuth(`${API_URL}/api/rooms/${room.id}/leave`, { method: 'POST' })
+
+    if (res.ok || res.status === 204) {
+      setRooms(prev => prev.filter(r => r.id !== room.id))
     }
   }
 
@@ -164,7 +211,7 @@ function Dashboard({ session }: { session: Session }) {
         </div>
         <div className="flex items-center gap-4">
           <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-semibold shadow-sm">
-            {initials(session.name)}
+            {initials(sessionRef.current.name)}
           </div>
           <button onClick={signOut} className="text-xs text-zinc-400 hover:text-zinc-600 transition-colors">Sign out</button>
         </div>
@@ -192,25 +239,43 @@ function Dashboard({ session }: { session: Session }) {
         ) : (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-5">
             {rooms.map(room => (
-              <button
+              <div
                 key={room.id}
-                onClick={() => router.push(`/room/${room.id}`)}
-                className="bg-white border border-zinc-200 rounded-xl overflow-hidden text-left hover:border-blue-400 hover:shadow-md transition-all group"
+                className="bg-white border border-zinc-200 rounded-xl overflow-hidden hover:border-blue-400 hover:shadow-md transition-all group relative"
               >
-                <div className="h-28 overflow-hidden">
-                  <RoomThumbnail id={room.id} />
-                </div>
-                <div className="p-4">
-                  <p className="font-semibold text-sm text-zinc-900 group-hover:text-blue-600 transition-colors truncate">{room.name}</p>
-                  <p className="text-xs text-zinc-400 mt-0.5">{new Date(room.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
-                  <div className="flex items-center justify-between mt-3">
-                    <div className="w-6 h-6 rounded-full bg-blue-600 border-2 border-white flex items-center justify-center text-white text-[9px] font-semibold">
-                      {initials(session.name)}
-                    </div>
-                    <span className="text-zinc-400 text-xs group-hover:text-blue-500 transition-colors">Open →</span>
+                {/* Delete button */}
+                <button
+                  type="button"
+                  onClick={() => handleRoomAction(room)}
+                  className="absolute top-2 right-2 z-10 w-7 h-7 flex items-center justify-center rounded-md bg-white/80 hover:bg-red-50 text-zinc-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all shadow-sm border border-zinc-200 hover:border-red-200"
+                  title={room.role === 'owner' ? 'Delete room' : 'Leave room'}
+                >
+                  <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+                    <path d="M1.5 3.5h10M5 3.5V2h3v1.5M4 3.5l.6 7h4.8l.6-7H4z" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </button>
+
+                {/* Clickable area to open room */}
+                <button
+                  type="button"
+                  onClick={() => router.push(`/room/${room.id}`)}
+                  className="w-full text-left"
+                >
+                  <div className="h-28 overflow-hidden">
+                    <RoomThumbnail id={room.id} />
                   </div>
-                </div>
-              </button>
+                  <div className="p-4">
+                    <p className="font-semibold text-sm text-zinc-900 group-hover:text-blue-600 transition-colors truncate">{room.name}</p>
+                    <p className="text-xs text-zinc-400 mt-0.5">{new Date(room.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+                    <div className="flex items-center justify-between mt-3">
+                      <div className="w-6 h-6 rounded-full bg-blue-600 border-2 border-white flex items-center justify-center text-white text-[9px] font-semibold">
+                        {initials(sessionRef.current.name)}
+                      </div>
+                      <span className="text-zinc-400 text-xs group-hover:text-blue-500 transition-colors">Open →</span>
+                    </div>
+                  </div>
+                </button>
+              </div>
             ))}
 
             {/* New room card */}

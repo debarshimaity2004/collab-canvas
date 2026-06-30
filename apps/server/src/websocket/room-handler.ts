@@ -2,28 +2,51 @@ import { WebSocketServer } from 'ws'
 import * as Y from 'yjs'
 import { AuthenticatedSocket } from './ws-server.js'
 import { WS_EVENTS } from '@collab-canvas/types'
-import { subscribeToRoom, unsubscribeFromRoom } from './redis-pubsub.js'
+import { subscribeToRoom, unsubscribeFromRoom, publishCanvasUpdate } from './redis-pubsub.js'
+import { saveSnapshot, loadSnapshot } from '../services/snapshot.service.js'
 
-// roomId → Set of connected socket userId
 const rooms = new Map<string, Set<string>>()
 
-// roomId → server-side Y.Doc (accumulates all updates for state recovery on join)
+// roomId → live Y.Doc (in-memory, authoritative while users are connected)
 const roomDocs = new Map<string, Y.Doc>()
 
-function getRoomDoc(roomId: string): Y.Doc {
-  if (!roomDocs.has(roomId)) {
-    roomDocs.set(roomId, new Y.Doc())
+// roomId → single init promise — prevents duplicate snapshot loads on concurrent joins
+const roomDocInit = new Map<string, Promise<Y.Doc>>()
+
+// Save to Postgres every N updates to guard against mid-session crashes
+const updateCounts = new Map<string, number>()
+const SNAPSHOT_INTERVAL = 50
+
+async function getOrInitRoomDoc(roomId: string): Promise<Y.Doc> {
+  if (roomDocs.has(roomId)) return roomDocs.get(roomId)!
+
+  if (!roomDocInit.has(roomId)) {
+    roomDocInit.set(
+      roomId,
+      (async () => {
+        const loaded = await loadSnapshot(roomId)
+        const doc = loaded ?? new Y.Doc()
+        roomDocs.set(roomId, doc)
+        return doc
+      })(),
+    )
   }
-  return roomDocs.get(roomId)!
+
+  return roomDocInit.get(roomId)!
 }
 
 export function getRoomSockets(wss: WebSocketServer, roomId: string): AuthenticatedSocket[] {
   return [...wss.clients].filter(
-    (c) => (c as AuthenticatedSocket).roomId === roomId
+    (c) => (c as AuthenticatedSocket).roomId === roomId,
   ) as AuthenticatedSocket[]
 }
 
-export function broadcastToRoom(wss: WebSocketServer, roomId: string, data: unknown, excludeId?: string) {
+export function broadcastToRoom(
+  wss: WebSocketServer,
+  roomId: string,
+  data: unknown,
+  excludeId?: string,
+) {
   const msg = JSON.stringify(data)
   getRoomSockets(wss, roomId).forEach((client) => {
     if (client.userId !== excludeId && client.readyState === client.OPEN) {
@@ -32,41 +55,56 @@ export function broadcastToRoom(wss: WebSocketServer, roomId: string, data: unkn
   })
 }
 
-export function handleCanvasUpdate(socket: AuthenticatedSocket, update: Buffer, wss: WebSocketServer) {
+export function handleCanvasUpdate(
+  socket: AuthenticatedSocket,
+  update: Buffer,
+  _wss: WebSocketServer,
+) {
   const roomId = socket.roomId!
-  const doc = getRoomDoc(roomId)
+  const doc = roomDocs.get(roomId)
+  if (!doc) return
 
-  // Merge update into server-side doc so new joiners get full state
   Y.applyUpdate(doc, update)
+  publishCanvasUpdate(roomId, update, socket.userId)
 
-  // Broadcast binary update directly to all other peers in the room
-  getRoomSockets(wss, roomId).forEach((client) => {
-    if (client.userId !== socket.userId && client.readyState === client.OPEN) {
-      client.send(update)
-    }
-  })
+  // Periodic snapshot — fire-and-forget, errors don't block the draw path
+  const count = (updateCounts.get(roomId) ?? 0) + 1
+  updateCounts.set(roomId, count)
+  if (count % SNAPSHOT_INTERVAL === 0) {
+    saveSnapshot(roomId, doc).catch((err) =>
+      console.error(`Periodic snapshot failed for room ${roomId}:`, err),
+    )
+  }
 }
 
-export function handleRoomJoin(socket: AuthenticatedSocket, roomId: string, wss: WebSocketServer) {
+export async function handleRoomJoin(
+  socket: AuthenticatedSocket,
+  roomId: string,
+  wss: WebSocketServer,
+) {
   socket.roomId = roomId
 
   if (!rooms.has(roomId)) rooms.set(roomId, new Set())
   rooms.get(roomId)!.add(socket.userId)
 
-  subscribeToRoom(roomId, wss)
+  subscribeToRoom(roomId)
 
-  broadcastToRoom(wss, roomId, {
-    event: WS_EVENTS.USER_JOINED,
-    payload: { userId: socket.userId, name: socket.userName },
-  }, socket.userId)
+  broadcastToRoom(
+    wss,
+    roomId,
+    { event: WS_EVENTS.USER_JOINED, payload: { userId: socket.userId, name: socket.userName } },
+    socket.userId,
+  )
 
-  socket.send(JSON.stringify({
-    event: WS_EVENTS.ROOM_STATE,
-    payload: { roomId, members: [...rooms.get(roomId)!] },
-  }))
+  socket.send(
+    JSON.stringify({
+      event: WS_EVENTS.ROOM_STATE,
+      payload: { roomId, members: [...rooms.get(roomId)!] },
+    }),
+  )
 
-  // Send accumulated Yjs state so new joiner catches up instantly
-  const doc = getRoomDoc(roomId)
+  // Load from snapshot if this is the first join after a server restart
+  const doc = await getOrInitRoomDoc(roomId)
   const state = Y.encodeStateAsUpdate(doc)
   // Yjs empty state is 2 bytes — only send if there's actual content
   if (state.byteLength > 2) {
@@ -74,16 +112,11 @@ export function handleRoomJoin(socket: AuthenticatedSocket, roomId: string, wss:
   }
 }
 
-export function handleRoomLeave(socket: AuthenticatedSocket, wss: WebSocketServer) {
+export async function handleRoomLeave(socket: AuthenticatedSocket, wss: WebSocketServer) {
   if (!socket.roomId) return
 
   const roomId = socket.roomId
   rooms.get(roomId)?.delete(socket.userId)
-  if (rooms.get(roomId)?.size === 0) {
-    rooms.delete(roomId)
-    unsubscribeFromRoom(roomId)
-    // Keep the Y.Doc alive for a bit in case users rejoin — GC handled by Node process
-  }
 
   broadcastToRoom(wss, roomId, {
     event: WS_EVENTS.USER_LEFT,
@@ -91,4 +124,20 @@ export function handleRoomLeave(socket: AuthenticatedSocket, wss: WebSocketServe
   })
 
   socket.roomId = undefined
+
+  if (rooms.get(roomId)?.size === 0) {
+    rooms.delete(roomId)
+    unsubscribeFromRoom(roomId)
+    updateCounts.delete(roomId)
+
+    // Persist final state before evicting from memory
+    const doc = roomDocs.get(roomId)
+    if (doc) {
+      roomDocs.delete(roomId)
+      roomDocInit.delete(roomId)
+      await saveSnapshot(roomId, doc).catch((err) =>
+        console.error(`Final snapshot failed for room ${roomId}:`, err),
+      )
+    }
+  }
 }

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react'
 import * as Y from 'yjs'
+import { IndexeddbPersistence } from 'y-indexeddb'
 import { createYDoc } from '../lib/yjs'
 import { OpQueue } from '../lib/op-queue'
 import type { Shape, CursorPosition } from '@collab-canvas/types'
@@ -49,6 +50,9 @@ export function useCollaboration(
     docRef.current = doc
     shapesRef.current = shapes
     undoManagerRef.current = undoManager
+
+    // Persist every Yjs update to IndexedDB — loads cached state immediately on next open
+    const persistence = new IndexeddbPersistence(`collabcanvas-${roomId}`, doc)
 
     const ws = new WebSocket(`${WS_URL}?token=${token}`)
     ws.binaryType = 'arraybuffer'
@@ -99,6 +103,7 @@ export function useCollaboration(
     doc.on('update', onUpdate)
 
     return () => {
+      persistence.destroy()
       doc.off('update', onUpdate)
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ event: WS_EVENTS.LEAVE_ROOM, payload: {} }))

@@ -6,6 +6,7 @@ import {
   getRoom,
   createRoomHandler,
   deleteRoomHandler,
+  leaveRoomHandler,
   inviteMember,
 } from '../controllers/room.controller.js'
 
@@ -17,6 +18,7 @@ router.get('/', listRooms)
 router.get('/:id', getRoom)
 router.post('/', createRoomHandler)
 router.delete('/:id', deleteRoomHandler)
+router.post('/:id/leave', leaveRoomHandler)
 router.post('/:id/members', inviteMember)
 
 export default router

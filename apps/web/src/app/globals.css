@@ -13,3 +13,9 @@ body {
   height: 100%;
   overflow: hidden;
 }
+
+.toolbar-stroke-width-slider {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  height: 48px;
+}

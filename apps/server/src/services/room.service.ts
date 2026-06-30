@@ -37,6 +37,13 @@ export async function deleteRoom(roomId: string, userId: string) {
   await prisma.room.delete({ where: { id: roomId } })
 }
 
+export async function leaveRoom(roomId: string, userId: string) {
+  const member = await prisma.roomMember.findFirst({ where: { roomId, userId } })
+  if (!member) throw new Error('Not a member of this room')
+  if (member.role === 'owner') throw new Error('Owner cannot leave — delete the room instead')
+  await prisma.roomMember.delete({ where: { userId_roomId: { userId, roomId } } })
+}
+
 export async function addMemberToRoom(roomId: string, inviteeEmail: string, requesterId: string) {
   const requester = await prisma.roomMember.findFirst({
     where: { roomId, userId: requesterId, role: { in: ['owner', 'editor'] } },
