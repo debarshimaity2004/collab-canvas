@@ -1,5 +1,5 @@
 import { WebSocketServer, WebSocket } from 'ws'
-import { IncomingMessage } from 'http'
+import { IncomingMessage, Server } from 'http'
 import jwt from 'jsonwebtoken'
 import { env } from '../config/env.js'
 import type { Session } from '@collab-canvas/types'
@@ -14,8 +14,8 @@ export interface AuthenticatedSocket extends WebSocket {
   roomId?: string
 }
 
-export function createWsServer(port: number) {
-  const wss = new WebSocketServer({ port })
+export function createWsServer(server: Server) {
+  const wss = new WebSocketServer({ server })
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     const url = new URL(req.url ?? '/', `ws://localhost`)
@@ -72,6 +72,6 @@ export function createWsServer(port: number) {
   })
 
   initRedisPubSub(wss)
-  console.log(`WebSocket server listening on port ${port}`)
+  console.log('WebSocket server attached to HTTP server')
   return wss
 }

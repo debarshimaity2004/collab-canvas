@@ -1,3 +1,4 @@
+import http from 'http'
 import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
@@ -24,9 +25,10 @@ app.use('/api/users', userRoutes)
 
 app.use(errorHandler)
 
-app.listen(env.PORT, () => {
-  console.log(`HTTP server running on port ${env.PORT}`)
-})
+// Single HTTP server shared by Express and the WS server
+const server = http.createServer(app)
+createWsServer(server)
 
-// WebSocket server on PORT + 1 (e.g. 4001)
-createWsServer(env.PORT + 1)
+server.listen(env.PORT, () => {
+  console.log(`Server listening on port ${env.PORT} (HTTP + WS)`)
+})

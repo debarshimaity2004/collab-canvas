@@ -8,7 +8,9 @@ import { OpQueue } from '../lib/op-queue'
 import type { Shape, CursorPosition } from '@collab-canvas/types'
 import { WS_EVENTS } from '@collab-canvas/types'
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:3001'
+// Derive WebSocket URL from the API URL: https:// → wss://, http:// → ws://
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'
+const WS_URL = API_URL.replace(/^https/, 'wss').replace(/^http/, 'ws')
 
 export interface CollaborationState {
   doc: Y.Doc | null

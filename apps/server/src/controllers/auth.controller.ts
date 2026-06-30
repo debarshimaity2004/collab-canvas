@@ -13,11 +13,13 @@ const loginSchema = z.object({
   password: z.string(),
 })
 
+const isProd = process.env.NODE_ENV === 'production'
 const COOKIE_OPTS = {
   httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: 'lax' as const,
-  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+  secure: isProd,
+  // cross-origin in prod (different Render subdomains) requires SameSite=None + Secure
+  sameSite: (isProd ? 'none' : 'lax') as 'none' | 'lax',
+  maxAge: 7 * 24 * 60 * 60 * 1000,
   path: '/',
 }
 
