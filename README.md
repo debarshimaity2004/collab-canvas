@@ -4,14 +4,18 @@ A production-grade real-time collaborative whiteboard. Multiple users can draw o
 
 Think lightweight Figma, built from scratch.
 
+**Live:** https://collabcanvas-web.onrender.com
+
 ---
 
-## What's working right now
+## What's working
 
 **Auth & Workspace**
 - Register / login with JWT auth (httpOnly cookie for refresh token, auto-refresh on 401)
+- Password visibility toggle on login and register forms
 - Dashboard — create rooms, see all your rooms as cards with live thumbnails
 - Delete room (owner only) or leave room (collaborators) — role-aware, protected server-side
+- When owner deletes an active room, all connected collaborators receive a real-time notification and are redirected to the dashboard
 - Invite collaborators by email
 
 **Canvas**
@@ -22,6 +26,7 @@ Think lightweight Figma, built from scratch.
 - Resize any shape with 8 grab handles (corners + edge midpoints); arrows have 2 endpoint handles
 - Text tool: textarea overlay with auto-grow, drag corner to resize and scale font proportionally
 - Delete selected shape via floating button or `Delete` / `Backspace`
+- Export canvas as PNG (white background, downloads instantly)
 - Undo / redo — backed by Yjs UndoManager
 
 **Real-time collaboration**
@@ -31,6 +36,9 @@ Think lightweight Figma, built from scratch.
 - New joiner catches up instantly via full `Y.encodeStateAsUpdate` on join
 - Snapshot persistence: Yjs doc saved to PostgreSQL every 50 ops and when the last user leaves; reloaded on room join so state survives server restarts
 - y-indexeddb local persistence — canvas loads from IndexedDB instantly before WS sync completes
+
+**Observability**
+- `GET /metrics` — Prometheus endpoint with app-level gauges/counters + full Node.js process metrics (heap, GC, event loop lag percentiles)
 
 ---
 
@@ -47,8 +55,9 @@ Think lightweight Figma, built from scratch.
 | WebSocket | ws library (binary Yjs protocol) |
 | Pub/Sub | Redis via ioredis |
 | Database | PostgreSQL + Prisma ORM |
+| Metrics | prom-client (Prometheus) |
 | Styling | TailwindCSS |
-| Infra | Docker + docker-compose |
+| Infra | Docker + docker-compose (local), Render (production) |
 | Monorepo | pnpm workspaces |
 
 ---
@@ -63,10 +72,10 @@ Browser
   ├── y-indexeddb  (local persistence)
   └── WebSocket client
         │  binary Yjs updates (draw ops)
-        │  JSON control messages (join/leave/cursor)
+        │  JSON control messages (join/leave/cursor/room_deleted)
         ▼
   Express API  (JWT auth, rate limiting, room CRUD)
-  WebSocket Server  (port 4001)
+  WebSocket Server  (same port — HTTP upgrade)
         │
         ├── server-side Y.Doc per room
         │     accumulates updates → sent to new joiners on join
@@ -86,6 +95,9 @@ User draws → Yjs encodes binary CRDT update → WebSocket sends to server → 
 
 **New user joins:**
 Client connects → sends `join_room` → server loads latest Postgres snapshot + in-memory ops → `Y.encodeStateAsUpdate(roomDoc)` → sends full binary state → client applies → canvas fully caught up in one round trip
+
+**Room deleted by owner:**
+Owner calls `DELETE /api/rooms/:id` → server broadcasts `room_deleted` WS event to all connected clients → clients show notification banner → redirect to dashboard after 3 s → server deletes room from DB
 
 **Offline:**
 WS disconnects → y-indexeddb keeps local state → reconnect → Yjs syncs delta from server → deduplicates already-applied ops automatically
@@ -107,10 +119,10 @@ collab-canvas/
 │   │       │   ├── register/
 │   │       │   └── room/[id]/        # Canvas room page
 │   │       ├── components/
-│   │       │   ├── Canvas.tsx        # Canvas element, TextEditor overlay, delete button
+│   │       │   ├── Canvas.tsx        # Canvas element, TextEditor overlay, delete + export
 │   │       │   └── Toolbar.tsx       # Tool picker, colors, stroke width, undo/redo
 │   │       ├── hooks/
-│   │       │   ├── useCollaboration.ts  # WS + Yjs sync + presence + cursors
+│   │       │   ├── useCollaboration.ts  # WS + Yjs sync + presence + room_deleted handling
 │   │       │   └── useCanvas.ts         # Drawing, pan/zoom, select, resize, RAF loop
 │   │       ├── lib/
 │   │       │   ├── canvas-renderer.ts   # renderShape, resize handles, bbox, selection ring
@@ -125,6 +137,7 @@ collab-canvas/
 │           ├── routes/               # auth, rooms, users
 │           ├── controllers/
 │           ├── middleware/           # JWT verify, rate limit, error handler
+│           ├── metrics.ts            # prom-client — Prometheus metrics registry
 │           ├── websocket/
 │           │   ├── ws-server.ts          # Binary/JSON message routing
 │           │   ├── room-handler.ts       # Y.Doc per room, snapshot load/save, broadcast
@@ -149,7 +162,7 @@ collab-canvas/
 
 ---
 
-## Getting Started
+## Getting Started (local)
 
 ### Prerequisites
 
@@ -195,8 +208,9 @@ pnpm --filter @collab-canvas/web dev
 |---|---|
 | Web app | http://localhost:3000 |
 | API server | http://localhost:4000 |
-| WebSocket | ws://localhost:4001 |
+| WebSocket | ws://localhost:4000 (same port, HTTP upgrade) |
 | Health check | http://localhost:4000/health |
+| Metrics | http://localhost:4000/metrics |
 
 ---
 
@@ -211,8 +225,6 @@ pnpm --filter @collab-canvas/web dev
 | POST | `/api/auth/refresh` | — (uses cookie) | Rotate tokens silently |
 | POST | `/api/auth/logout` | — | Clears refresh cookie |
 
-Login and register return `{ accessToken, userId, name }`.
-
 ### Rooms
 
 All room endpoints require `Authorization: Bearer <accessToken>`.
@@ -222,25 +234,25 @@ All room endpoints require `Authorization: Bearer <accessToken>`.
 | GET | `/api/rooms` | List rooms you belong to (includes your `role`) |
 | POST | `/api/rooms` | Create a room (`{ name }`) |
 | GET | `/api/rooms/:id` | Get room details + members |
-| DELETE | `/api/rooms/:id` | Delete room permanently (owner only) |
+| DELETE | `/api/rooms/:id` | Delete room permanently (owner only) — broadcasts `room_deleted` to active clients |
 | POST | `/api/rooms/:id/leave` | Leave room — removes you from members (editor only) |
 | POST | `/api/rooms/:id/members` | Invite member by email (`{ email }`) |
 
-### Users
+### Observability
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/api/users/me` | Get current user profile |
+| GET | `/health` | Readiness probe — returns `{ status: "ok" }` |
+| GET | `/metrics` | Prometheus scrape endpoint |
 
 ---
 
 ## WebSocket Protocol
 
-Connect: `ws://localhost:4001?token=<accessToken>`
+Connect: `ws://localhost:4000?token=<accessToken>`
 
 **Client → Server**
 
-JSON control messages:
 ```json
 { "event": "join_room",   "payload": { "roomId": "uuid" } }
 { "event": "leave_room",  "payload": {} }
@@ -251,15 +263,15 @@ Canvas updates are sent as **raw binary** (Yjs `Uint8Array`) — not JSON.
 
 **Server → Client**
 
-JSON events:
 ```json
 { "event": "room_state",      "payload": { "roomId": "...", "members": [...] } }
 { "event": "user_joined",     "payload": { "userId": "...", "name": "..." } }
 { "event": "user_left",       "payload": { "userId": "..." } }
-{ "event": "presence_update", "payload": { "userId": "...", "name": "...", "x": 120, "y": 340, "color": "..." } }
+{ "event": "presence_update", "payload": { "userId": "...", "x": 120, "y": 340, "color": "..." } }
+{ "event": "room_deleted",    "payload": { "roomId": "..." } }
 ```
 
-Canvas updates from peers are forwarded as **raw binary** Yjs updates. On room join, the server sends `Y.encodeStateAsUpdate(doc)` as a binary message — new client catches up to full canvas state in one round trip.
+Canvas updates from peers are forwarded as **raw binary** Yjs updates.
 
 ---
 
@@ -304,11 +316,13 @@ Snapshot    id, roomId, data (Bytes — binary Yjs state), version, createdAt
 - [x] Access token auto-refresh on 401 (transparent to user)
 - [x] Role-aware delete/leave on dashboard (owner deletes room, editor leaves room)
 
-### Phase 4 — Production (next)
-- [ ] Prometheus metrics: connected users, op latency, room count
-- [ ] Export canvas to PNG
-- [ ] Docker production build + Nginx reverse proxy
-- [ ] Deploy to Railway / Render (live public URL)
+### Phase 4 — Production ✅
+- [x] Deploy to Render (live public URL)
+- [x] HTTP + WebSocket on single port (Render compatible)
+- [x] Prometheus metrics endpoint (`/metrics`)
+- [x] Export canvas as PNG
+- [x] Password visibility toggle on auth forms
+- [x] Room deletion broadcasts `room_deleted` WS event — collaborators notified and redirected
 
 ---
 
@@ -324,7 +338,9 @@ Snapshot    id, roomId, data (Bytes — binary Yjs state), version, createdAt
 
 **Raw Canvas API** — No Konva, Fabric.js, or other canvas library. The renderer is a pure function over shape state, driven by a `requestAnimationFrame` loop with a single `ctx.setTransform` call for pan/zoom. Full control, no abstraction tax, demonstrates rendering fundamentals.
 
-**Viewport-invariant resize handles** — Handle size is computed as `8 / ctx.getTransform().a` so handles stay exactly 8 px on screen regardless of zoom level, preventing them from becoming unclickable at high zoom or overwhelming at low zoom.
+**Viewport-invariant resize handles** — Handle size is computed as `8 / ctx.getTransform().a` so handles stay exactly 8 px on screen regardless of zoom level.
+
+**Room deletion broadcast** — The server sends `room_deleted` over WebSocket before deleting from the database, giving active clients time to receive the event and navigate away gracefully rather than hitting dangling requests.
 
 ---
 
