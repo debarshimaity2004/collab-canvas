@@ -54,10 +54,10 @@ Think lightweight Figma, built from scratch.
 | Backend | Node.js + Express + TypeScript |
 | WebSocket | ws library (binary Yjs protocol) |
 | Pub/Sub | Redis via ioredis |
-| Database | PostgreSQL + Prisma ORM |
+| Database | PostgreSQL (Neon) + Prisma ORM |
 | Metrics | prom-client (Prometheus) |
 | Styling | TailwindCSS |
-| Infra | Docker + docker-compose (local), Render (production) |
+| Infra | Docker + docker-compose (local), Render + Neon (production) |
 | Monorepo | pnpm workspaces |
 
 ---
